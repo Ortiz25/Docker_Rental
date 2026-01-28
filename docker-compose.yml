@@ -1,34 +1,20 @@
 version: '3.8'
 
 services:
-  # Nginx Reverse Proxy (HTTP only for local development)
-  proxy:
-    build: ./nginx-proxy
-    container_name: rental-proxy
-    restart: always
-    ports:
-      - "80:80"
-    environment:
-      - SERVER_NAME=localhost
-    depends_on:
-      - frontend
-    networks:
-      - rental-network
-
   # Frontend Service
   frontend:
     build:
-      context: ./Rentalmgt-frontend
+      context: ./Rental-frontend
       dockerfile: Dockerfile
     container_name: rental-frontend
     restart: always
-    expose:
-      - "80"
+    ports:
+      - "3000:80"
     environment:
       - NODE_ENV=development
-      - REACT_APP_API_URL=/backend
+      - REACT_APP_API_URL=http://localhost:5000
     volumes:
-      - ./Rentalmgt-frontend:/app
+      - ./Rental-frontend:/app
       - /app/node_modules
     networks:
       - rental-network
@@ -36,12 +22,12 @@ services:
   # Backend Service
   backend:
     build:
-      context: ./Rentalmgt--backend
+      context: ./Rental-Backend
       dockerfile: Dockerfile
     container_name: rental-backend
     restart: always
-    expose:
-      - "5000"
+    ports:
+      - "5000:5000"
     environment:
       - NODE_ENV=development
       - PORT=5000
@@ -52,7 +38,7 @@ services:
       - DB_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_SECRET=${JWT_SECRET:-dev_jwt_secret}
     volumes:
-      - ./Rentalmgt--backend:/app
+      - ./Rental-Backend:/app
       - /app/node_modules
     depends_on:
       - postgres
