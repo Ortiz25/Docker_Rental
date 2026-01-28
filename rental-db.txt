@@ -1,0 +1,842 @@
+-- Rental Management System PostgreSQL Database Schema
+-- Clean and Optimized Version with IF NOT EXISTS
+-- Part 1: Foundation and Core Tables
+
+-- Create the update timestamp function
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Drop and recreate user_roles table
+DROP TABLE IF EXISTS user_roles CASCADE;
+CREATE TABLE IF NOT EXISTS user_roles (
+    id SERIAL PRIMARY KEY,
+    role_name VARCHAR(50) NOT NULL UNIQUE,
+    description TEXT,
+    permissions JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insert default roles (safe insert, ignore conflicts)
+INSERT INTO user_roles (role_name, description, permissions)
+VALUES 
+    ('Super Admin', 'Full system access', '{"*": {"*": true}}'),
+    ('Admin', 'Property manager with administrative rights', '{"leases": {"view": true, "edit": true}}'),
+    ('Tenant', 'Tenant portal access', '{"portal": {"view": true}}')
+ON CONFLICT (role_name) DO NOTHING;
+
+-- Expense categories lookup table
+DROP TABLE IF EXISTS expense_categories CASCADE;
+CREATE TABLE IF NOT EXISTS expense_categories (
+    id SERIAL PRIMARY KEY,
+    category_name VARCHAR(100) NOT NULL UNIQUE,
+    description TEXT,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Document categories table
+DROP TABLE IF EXISTS document_categories CASCADE;
+CREATE TABLE IF NOT EXISTS document_categories (
+    id SERIAL PRIMARY KEY,
+    category_name VARCHAR(100) NOT NULL UNIQUE,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Utilities table
+DROP TABLE IF EXISTS utilities CASCADE;
+CREATE TABLE IF NOT EXISTS utilities (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    description TEXT
+);
+
+-- Amenities table
+DROP TABLE IF EXISTS amenities CASCADE;
+CREATE TABLE IF NOT EXISTS amenities (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    description TEXT
+);
+
+-- Blacklist categories table
+DROP TABLE IF EXISTS blacklist_categories CASCADE;
+CREATE TABLE IF NOT EXISTS blacklist_categories (
+    id SERIAL PRIMARY KEY,
+    category_name VARCHAR(100) NOT NULL UNIQUE,
+    description TEXT,
+    default_severity VARCHAR(20) DEFAULT 'medium' 
+        CHECK (default_severity IN ('low', 'medium', 'high', 'severe')),
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insert default expense categories
+INSERT INTO expense_categories (category_name, description) VALUES
+('Property Tax', 'Annual property taxes'),
+('Insurance', 'Property insurance premiums'),
+('Administrative', 'Administrative and management costs'),
+('Utilities', 'Property utilities (if not tenant-paid)'),
+('Marketing', 'Property marketing and advertising'),
+('Legal & Professional', 'Legal fees, accounting, etc.'),
+('Capital Improvements', 'Major property improvements'),
+('Property Management', 'Management company fees'),
+('HOA Fees', 'Homeowners association fees'),
+('Landscaping', 'Landscaping and grounds maintenance'),
+('Security', 'Security systems and services'),
+('Cleaning', 'Common area cleaning services')
+ON CONFLICT (category_name) DO NOTHING;
+
+-- Insert default blacklist categories
+INSERT INTO blacklist_categories (category_name, description, default_severity) VALUES
+('Property Damage', 'Caused significant damage to property', 'high'),
+('Non-Payment', 'Chronic late payments or non-payment of rent', 'high'),
+('Lease Violation', 'Repeated violations of lease terms', 'medium'),
+('Noise Complaints', 'Multiple noise complaints from neighbors', 'medium'),
+('Illegal Activity', 'Engaged in illegal activities on property', 'severe'),
+('Harassment', 'Harassment of staff or other tenants', 'high'),
+('Unauthorized Occupancy', 'Allowed unauthorized persons to live in unit', 'medium'),
+('False Information', 'Provided false information during application', 'high'),
+('Eviction History', 'Previously evicted from other properties', 'low'),
+('Other', 'Other reasons not listed above', 'medium')
+ON CONFLICT (category_name) DO NOTHING;
+
+-- ===============================
+-- Tenants Table
+-- ===============================
+DROP TABLE IF EXISTS tenants CASCADE;
+CREATE TABLE IF NOT EXISTS tenants (
+    id SERIAL PRIMARY KEY,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    phone VARCHAR(20),
+    alternate_phone VARCHAR(20),
+    date_of_birth DATE,
+    identification_type VARCHAR(50) 
+        CHECK (identification_type IN ('SSN', 'Driver License', 'Passport', 'National ID', 'Other')),
+    identification_number VARCHAR(100),
+    emergency_contact_name VARCHAR(200),
+    emergency_contact_phone VARCHAR(20),
+    emergency_contact_relationship VARCHAR(100),
+    employment_status VARCHAR(50) 
+        CHECK (employment_status IN ('Employed', 'Self-Employed', 'Unemployed', 'Student', 'Retired')),
+    employer_name VARCHAR(255),
+    employer_phone VARCHAR(20),
+    monthly_income DECIMAL(10,2),
+    previous_address TEXT,
+
+    -- Blacklisting fields
+    is_blacklisted BOOLEAN DEFAULT false,
+    blacklist_reason TEXT,
+    blacklisted_date TIMESTAMP,
+    blacklisted_by VARCHAR(255),
+    blacklist_notes TEXT,
+    blacklist_severity VARCHAR(20) 
+        CHECK (blacklist_severity IN ('low', 'medium', 'high', 'severe')),
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ===============================
+-- Users Table
+-- ===============================
+DROP TABLE IF EXISTS users CASCADE;
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
+    phone VARCHAR(20),
+
+    -- Role and tenant association
+    role_id INTEGER REFERENCES user_roles(id) ON DELETE RESTRICT,
+    tenant_id INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
+
+    -- Account status
+    is_active BOOLEAN DEFAULT true,
+    is_verified BOOLEAN DEFAULT false,
+    last_login TIMESTAMP,
+
+    -- Security (expanded to TEXT where needed)
+    password_reset_token TEXT,
+    password_reset_expires TIMESTAMP,
+    email_verification_token TEXT,
+    email_verification_expires TIMESTAMP,
+    two_factor_enabled BOOLEAN DEFAULT false,
+    two_factor_secret TEXT,
+    failed_login_attempts INTEGER DEFAULT 0,
+    locked_until TIMESTAMP,
+
+    -- Profile settings
+    profile_image_url VARCHAR(500),
+    timezone VARCHAR(50) DEFAULT 'Africa/Nairobi',
+    language VARCHAR(10) DEFAULT 'en',
+    notification_preferences JSONB DEFAULT '{"email": true, "sms": false, "push": true}',
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- ===============================
+-- Properties Table
+-- ===============================
+DROP TABLE IF EXISTS properties CASCADE;
+CREATE TABLE IF NOT EXISTS properties (
+    id SERIAL PRIMARY KEY,
+    property_name VARCHAR(255) NOT NULL,
+    address TEXT NOT NULL,
+    property_type VARCHAR(50) NOT NULL 
+        CHECK (property_type IN ('Apartment', 'House', 'Condominium', 'Townhouse', 'Studio', 'Other')),
+    total_units INTEGER DEFAULT 1,
+    size_sq_ft INTEGER,
+    monthly_rent DECIMAL(10,2),
+    security_deposit DECIMAL(10,2),
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ===============================
+-- Units Table
+-- ===============================
+DROP TABLE IF EXISTS units CASCADE;
+CREATE TABLE IF NOT EXISTS units (
+    id SERIAL PRIMARY KEY,
+    property_id INTEGER REFERENCES properties(id) ON DELETE CASCADE,
+    unit_number VARCHAR(50),
+    bedrooms INTEGER NOT NULL DEFAULT 0,
+    bathrooms DECIMAL(3,1) NOT NULL DEFAULT 0,
+    size_sq_ft INTEGER,
+    monthly_rent DECIMAL(10,2),
+    security_deposit DECIMAL(10,2),
+    occupancy_status VARCHAR(20) DEFAULT 'vacant' 
+        CHECK (occupancy_status IN ('occupied', 'vacant', 'maintenance')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(property_id, unit_number)
+);
+
+-- ===============================
+-- Leases Table
+-- ===============================
+DROP TABLE IF EXISTS leases CASCADE;
+CREATE TABLE IF NOT EXISTS leases (
+    id SERIAL PRIMARY KEY,
+    unit_id INTEGER REFERENCES units(id) ON DELETE RESTRICT,
+    lease_number VARCHAR(100) UNIQUE NOT NULL,
+    lease_type VARCHAR(50) DEFAULT 'Fixed Term' 
+        CHECK (lease_type IN ('Fixed Term', 'Month-to-Month', 'Week-to-Week')),
+    lease_status VARCHAR(50) DEFAULT 'active' 
+        CHECK (lease_status IN ('draft', 'active', 'expired', 'terminated', 'renewed')),
+    start_date DATE NOT NULL,
+    end_date DATE,
+    monthly_rent DECIMAL(10,2) NOT NULL,
+    security_deposit DECIMAL(10,2) NOT NULL,
+    pet_deposit DECIMAL(10,2) DEFAULT 0,
+    late_fee DECIMAL(10,2) DEFAULT 0,
+    grace_period_days INTEGER DEFAULT 5,
+    rent_due_day INTEGER DEFAULT 1 CHECK (rent_due_day BETWEEN 1 AND 31),
+    lease_terms TEXT,
+    special_conditions TEXT,
+    signed_date DATE,
+    move_in_date DATE,
+    move_out_date DATE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CHECK (end_date IS NULL OR end_date > start_date),
+    CHECK (move_in_date IS NULL OR move_in_date >= start_date),
+    CHECK (move_out_date IS NULL OR move_out_date >= move_in_date)
+);
+
+-- ===============================
+-- Property utilities junction table
+-- ===============================
+DROP TABLE IF EXISTS property_utilities CASCADE;
+CREATE TABLE IF NOT EXISTS property_utilities (
+    id SERIAL PRIMARY KEY,
+    property_id INTEGER REFERENCES properties(id) ON DELETE CASCADE,
+    utility_id INTEGER REFERENCES utilities(id) ON DELETE CASCADE,
+    included BOOLEAN DEFAULT false,
+    UNIQUE(property_id, utility_id)
+);
+
+-- ===============================
+-- Unit utilities junction table
+-- ===============================
+DROP TABLE IF EXISTS unit_utilities CASCADE;
+CREATE TABLE IF NOT EXISTS unit_utilities (
+    id SERIAL PRIMARY KEY,
+    unit_id INTEGER REFERENCES units(id) ON DELETE CASCADE,
+    utility_id INTEGER REFERENCES utilities(id) ON DELETE CASCADE,
+    included BOOLEAN DEFAULT false,
+    UNIQUE(unit_id, utility_id)
+);
+
+-- ===============================
+-- Property amenities junction table
+-- ===============================
+DROP TABLE IF EXISTS property_amenities CASCADE;
+CREATE TABLE IF NOT EXISTS property_amenities (
+    id SERIAL PRIMARY KEY,
+    property_id INTEGER REFERENCES properties(id) ON DELETE CASCADE,
+    amenity_id INTEGER REFERENCES amenities(id) ON DELETE CASCADE,
+    UNIQUE(property_id, amenity_id)
+);
+
+-- ===============================
+-- Property photos table
+-- ===============================
+DROP TABLE IF EXISTS property_photos CASCADE;
+CREATE TABLE IF NOT EXISTS property_photos (
+    id SERIAL PRIMARY KEY,
+    property_id INTEGER REFERENCES properties(id) ON DELETE CASCADE,
+    unit_id INTEGER REFERENCES units(id) ON DELETE CASCADE,
+    photo_url VARCHAR(500) NOT NULL,
+    photo_name VARCHAR(255),
+    is_primary BOOLEAN DEFAULT false,
+    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((property_id IS NOT NULL AND unit_id IS NULL) OR 
+           (property_id IS NULL AND unit_id IS NOT NULL))
+);
+
+-- ===============================
+-- Property expenses table
+-- ===============================
+DROP TABLE IF EXISTS property_expenses CASCADE;
+CREATE TABLE IF NOT EXISTS property_expenses (
+    id SERIAL PRIMARY KEY,
+    property_id INTEGER REFERENCES properties(id) ON DELETE CASCADE,
+    category_id INTEGER REFERENCES expense_categories(id),
+    expense_type VARCHAR(100) NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    frequency VARCHAR(20) DEFAULT 'monthly' 
+        CHECK (frequency IN ('monthly', 'quarterly', 'annual', 'one-time')),
+    start_date DATE DEFAULT CURRENT_DATE,
+    end_date DATE,
+    is_active BOOLEAN DEFAULT true,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by VARCHAR(255),
+    CONSTRAINT check_positive_amount CHECK (amount > 0),
+    CONSTRAINT check_valid_dates CHECK (end_date IS NULL OR end_date > start_date)
+);
+
+-- ===============================
+-- Lease tenants junction table
+-- ===============================
+DROP TABLE IF EXISTS lease_tenants CASCADE;
+CREATE TABLE IF NOT EXISTS lease_tenants (
+    id SERIAL PRIMARY KEY,
+    lease_id INTEGER REFERENCES leases(id) ON DELETE CASCADE,
+    tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
+    is_primary_tenant BOOLEAN DEFAULT false,
+    tenant_type VARCHAR(50) DEFAULT 'Tenant' 
+        CHECK (tenant_type IN ('Tenant', 'Co-Tenant', 'Guarantor', 'Occupant')),
+    added_date DATE DEFAULT CURRENT_DATE,
+    removed_date DATE,
+    UNIQUE(lease_id, tenant_id),
+    CHECK (removed_date IS NULL OR removed_date >= added_date)
+);
+
+-- ===============================
+-- Rent payments table
+-- ===============================
+DROP TABLE IF EXISTS rent_payments CASCADE;
+CREATE TABLE IF NOT EXISTS rent_payments (
+    id SERIAL PRIMARY KEY,
+    lease_id INTEGER REFERENCES leases(id) ON DELETE RESTRICT,
+    payment_date DATE,
+    due_date DATE NOT NULL,
+    amount_due DECIMAL(10,2) NOT NULL,
+    amount_paid DECIMAL(10,2) DEFAULT 0,
+    payment_method VARCHAR(50) 
+        CHECK (payment_method IN (
+            'Cash', 'Check', 'Bank Transfer', 'Credit Card', 'Online Payment', 
+            'Money Order', 'M-Pesa', 'Airtel Money', 'Other'
+        )),
+    payment_reference VARCHAR(255),
+    late_fee DECIMAL(10,2) DEFAULT 0,
+    payment_status VARCHAR(50) DEFAULT 'pending' 
+        CHECK (payment_status IN ('pending', 'paid', 'partial', 'overdue', 'failed')),
+    notes TEXT,
+    processed_by VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT check_payment_date_status CHECK (
+        (payment_status IN ('paid', 'partial') AND payment_date IS NOT NULL) 
+        OR 
+        (payment_status IN ('pending', 'overdue'))
+    )
+);
+
+-- ===============================
+-- Security deposits table
+-- ===============================
+DROP TABLE IF EXISTS security_deposits CASCADE;
+CREATE TABLE IF NOT EXISTS security_deposits (
+    id SERIAL PRIMARY KEY,
+    lease_id INTEGER REFERENCES leases(id) ON DELETE RESTRICT,
+    deposit_type VARCHAR(50) DEFAULT 'Security' 
+        CHECK (deposit_type IN ('Security', 'Pet', 'Key', 'Cleaning', 'Other')),
+    amount_collected DECIMAL(10,2) NOT NULL,
+    collection_date DATE NOT NULL,
+    amount_returned DECIMAL(10,2) DEFAULT 0,
+    return_date DATE,
+    deductions DECIMAL(10,2) DEFAULT 0,
+    deduction_reason TEXT,
+    status VARCHAR(50) DEFAULT 'held' 
+        CHECK (status IN ('held', 'partially_returned', 'fully_returned', 'forfeited')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CHECK (amount_returned <= amount_collected),
+    CHECK (return_date IS NULL OR return_date >= collection_date)
+);
+
+-- ===============================
+-- Lease renewals table
+-- ===============================
+DROP TABLE IF EXISTS lease_renewals CASCADE;
+CREATE TABLE IF NOT EXISTS lease_renewals (
+    id SERIAL PRIMARY KEY,
+    original_lease_id INTEGER REFERENCES leases(id) ON DELETE RESTRICT,
+    new_lease_id INTEGER REFERENCES leases(id) ON DELETE RESTRICT,
+    renewal_date DATE NOT NULL,
+    rent_increase DECIMAL(10,2) DEFAULT 0,
+    new_monthly_rent DECIMAL(10,2) NOT NULL,
+    renewal_terms TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(original_lease_id, new_lease_id)
+);
+
+-- ===============================
+-- Payment submissions table
+-- ===============================
+DROP TABLE IF EXISTS payment_submissions CASCADE;
+CREATE TABLE IF NOT EXISTS payment_submissions (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
+    lease_id INTEGER REFERENCES leases(id) ON DELETE CASCADE,
+    amount DECIMAL(10,2) NOT NULL,
+    payment_method VARCHAR(50) NOT NULL 
+        CHECK (payment_method IN (
+            'bank_transfer', 'mpesa', 'airtel_money', 'cash', 'check', 'other'
+        )),
+    transaction_reference VARCHAR(255) NOT NULL,
+    transaction_date DATE NOT NULL,
+    submission_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    submitted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    verification_status VARCHAR(50) DEFAULT 'pending' 
+        CHECK (verification_status IN ('pending', 'verified', 'rejected', 'under_review')),
+    verified_date TIMESTAMP,
+    verified_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    notes TEXT,
+    admin_notes TEXT,
+    attachment_urls TEXT[],
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT check_positive_amount CHECK (amount > 0),
+    CONSTRAINT check_transaction_date CHECK (transaction_date <= CURRENT_DATE),
+    CONSTRAINT check_verification_logic CHECK (
+        (verification_status = 'pending' AND verified_date IS NULL AND verified_by IS NULL) OR
+        (verification_status IN ('verified', 'rejected') AND verified_date IS NOT NULL AND verified_by IS NOT NULL)
+    )
+);
+
+-- ===============================
+-- User sessions table
+-- ===============================
+DROP TABLE IF EXISTS user_sessions CASCADE;
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    session_token TEXT NOT NULL UNIQUE,  -- changed from VARCHAR(255)
+    ip_address VARCHAR(50),
+    user_agent TEXT,
+    device_info TEXT,
+    location TEXT,
+    is_active BOOLEAN DEFAULT true,
+    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- ===============================
+-- User activity logs
+-- ===============================
+DROP TABLE IF EXISTS user_activity_logs CASCADE;
+CREATE TABLE IF NOT EXISTS user_activity_logs (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    action VARCHAR(100) NOT NULL,
+    entity_type VARCHAR(100),
+    entity_id INTEGER,
+    description TEXT,
+    ip_address VARCHAR(50),
+    user_agent TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ===============================
+-- Notifications table
+-- ===============================
+DROP TABLE IF EXISTS notifications CASCADE;
+CREATE TABLE IF NOT EXISTS notifications (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    notification_type VARCHAR(50) DEFAULT 'info' 
+        CHECK (notification_type IN ('info', 'warning', 'error', 'success', 'system')),
+    is_read BOOLEAN DEFAULT false,
+    read_at TIMESTAMP,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ===============================
+-- Document folders
+-- ===============================
+DROP TABLE IF EXISTS document_folders CASCADE;
+CREATE TABLE IF NOT EXISTS document_folders (
+    id SERIAL PRIMARY KEY,
+    parent_id INTEGER REFERENCES document_folders(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    is_shared BOOLEAN DEFAULT false,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ===============================
+-- Documents table
+-- ===============================
+DROP TABLE IF EXISTS documents CASCADE;
+CREATE TABLE IF NOT EXISTS documents (
+    id SERIAL PRIMARY KEY,
+    folder_id INTEGER REFERENCES document_folders(id) ON DELETE SET NULL,
+    lease_id INTEGER REFERENCES leases(id) ON DELETE SET NULL,
+    tenant_id INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
+    property_id INTEGER REFERENCES properties(id) ON DELETE SET NULL,
+    category_id INTEGER REFERENCES document_categories(id) ON DELETE SET NULL,
+    file_name VARCHAR(255) NOT NULL,
+    file_type VARCHAR(50),
+    file_url VARCHAR(500) NOT NULL,
+    file_size BIGINT,
+    uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_public BOOLEAN DEFAULT false,
+    description TEXT
+);
+
+-- ===============================
+-- Maintenance requests
+-- ===============================
+DROP TABLE IF EXISTS maintenance_requests CASCADE;
+CREATE TABLE IF NOT EXISTS maintenance_requests (
+    id SERIAL PRIMARY KEY,
+    property_id INTEGER REFERENCES properties(id) ON DELETE CASCADE,
+    unit_id INTEGER REFERENCES units(id) ON DELETE CASCADE,
+    tenant_id INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
+    request_title VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    priority VARCHAR(20) DEFAULT 'medium' 
+        CHECK (priority IN ('low', 'medium', 'high', 'emergency')),
+    status VARCHAR(20) DEFAULT 'open' 
+        CHECK (status IN ('open', 'in_progress', 'completed', 'closed')),
+    request_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_date TIMESTAMP,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- ===============================
+-- Communications table
+-- ===============================
+DROP TABLE IF EXISTS communications CASCADE;
+CREATE TABLE IF NOT EXISTS communications (
+    id SERIAL PRIMARY KEY,
+    sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    recipient_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    message_type VARCHAR(50) DEFAULT 'message' 
+        CHECK (message_type IN ('message', 'email', 'sms', 'system')),
+    subject VARCHAR(255),
+    message TEXT NOT NULL,
+    status VARCHAR(20) DEFAULT 'sent' 
+        CHECK (status IN ('sent', 'delivered', 'read', 'failed')),
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    read_at TIMESTAMP
+);
+
+-- ===============================
+-- Blacklist tracking
+-- ===============================
+DROP TABLE IF EXISTS blacklist_tracking CASCADE;
+CREATE TABLE IF NOT EXISTS blacklist_tracking (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
+    category_id INTEGER REFERENCES blacklist_categories(id) ON DELETE SET NULL,
+    reason TEXT,
+    notes TEXT,
+    severity VARCHAR(20) DEFAULT 'medium' 
+        CHECK (severity IN ('low', 'medium', 'high', 'severe')),
+    status VARCHAR(20) DEFAULT 'active' 
+        CHECK (status IN ('active', 'inactive', 'appealed', 'cleared')),
+    evidence_urls TEXT[],
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ===============================
+-- Cron job logs
+-- ===============================
+DROP TABLE IF EXISTS cron_job_logs CASCADE;
+CREATE TABLE IF NOT EXISTS cron_job_logs (
+    id SERIAL PRIMARY KEY,
+    job_name VARCHAR(255) NOT NULL,
+    execution_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR(20) DEFAULT 'success' 
+        CHECK (status IN ('success', 'failed', 'skipped')),
+    message TEXT,
+    duration_ms INTEGER,
+    error_details TEXT
+);
+
+-- =====================================
+-- Lease number generator main function
+-- =====================================
+CREATE OR REPLACE FUNCTION generate_lease_number(unit_id INT)
+RETURNS VARCHAR AS $$
+DECLARE
+    prop_id INT;
+    prop_code VARCHAR(3);
+    next_num INT;
+BEGIN
+    -- Get property info from the unit
+    SELECT p.id, LEFT(p.property_name, 3)
+    INTO prop_id, prop_code
+    FROM properties p
+    JOIN units u ON p.id = u.property_id
+    WHERE u.id = unit_id;
+
+    IF prop_id IS NULL THEN
+        RAISE EXCEPTION 'Unit % not linked to any property', unit_id;
+    END IF;
+
+    -- Get next available number for this unit
+    SELECT COALESCE(MAX(CAST(RIGHT(l.lease_number, 3) AS INTEGER)), 0) + 1
+    INTO next_num
+    FROM leases l
+    WHERE l.unit_id = unit_id;
+
+    -- Return formatted lease number e.g. APA-001
+    RETURN UPPER(prop_code) || '-' || TO_CHAR(next_num, 'FM000');
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- =====================================
+-- Trigger wrapper function
+-- =====================================
+CREATE OR REPLACE FUNCTION set_lease_number()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.lease_number IS NULL THEN
+        NEW.lease_number := generate_lease_number(NEW.unit_id);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =====================================
+-- Attach trigger to leases
+-- =====================================
+DROP TRIGGER IF EXISTS trigger_generate_lease_number ON leases CASCADE;
+CREATE TRIGGER trigger_generate_lease_number
+BEFORE INSERT ON leases
+FOR EACH ROW
+EXECUTE FUNCTION set_lease_number();
+
+-- ===============================
+-- Function: log user activity
+-- ===============================
+CREATE OR REPLACE FUNCTION log_user_activity(
+    p_user_id INT, p_action VARCHAR, 
+    p_entity_type VARCHAR, p_entity_id INT, p_description TEXT
+)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO user_activity_logs (user_id, action, entity_type, entity_id, description)
+    VALUES (p_user_id, p_action, p_entity_type, p_entity_id, p_description);
+END;
+$$ LANGUAGE plpgsql;
+
+-- ===============================
+-- Function: calculate monthly expenses
+-- ===============================
+CREATE OR REPLACE FUNCTION calculate_monthly_expenses(p_property_id INT)
+RETURNS DECIMAL(10,2) AS $$
+DECLARE
+    total DECIMAL(10,2);
+BEGIN
+    SELECT COALESCE(SUM(
+        CASE 
+            WHEN frequency = 'monthly' THEN amount
+            WHEN frequency = 'quarterly' THEN amount / 3
+            WHEN frequency = 'annual' THEN amount / 12
+            ELSE amount
+        END
+    ), 0)
+    INTO total
+    FROM property_expenses
+    WHERE property_id = p_property_id
+      AND is_active = true;
+
+    RETURN total;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ===============================
+-- Function: process verified payment submissions
+-- ===============================
+CREATE OR REPLACE FUNCTION process_verified_payment_submission(p_submission_id INT)
+RETURNS VOID AS $$
+DECLARE
+    sub_rec RECORD;
+    rent_rec RECORD;
+    new_total DECIMAL(10,2);
+BEGIN
+    -- Get submission
+    SELECT * INTO sub_rec
+    FROM payment_submissions
+    WHERE id = p_submission_id;
+
+    -- Only process if verified
+    IF sub_rec.verification_status = 'verified' THEN
+        -- Find first pending rent payment
+        SELECT * INTO rent_rec
+        FROM rent_payments
+        WHERE lease_id = sub_rec.lease_id
+          AND payment_status = 'pending'
+        ORDER BY due_date ASC
+        LIMIT 1;
+
+        IF FOUND THEN
+            new_total := rent_rec.amount_paid + sub_rec.amount;
+
+            UPDATE rent_payments
+            SET amount_paid = new_total,
+                payment_date = sub_rec.transaction_date,
+                payment_method = INITCAP(sub_rec.payment_method),
+                payment_reference = sub_rec.transaction_reference,
+                payment_status = CASE 
+                                    WHEN new_total >= rent_rec.amount_due THEN 'paid'
+                                    ELSE 'partial'
+                                 END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = rent_rec.id;
+
+            PERFORM log_user_activity(sub_rec.verified_by, 'verify_payment',
+                'payment_submission', sub_rec.id,
+                'Processed verified payment submission');
+        END IF;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ===============================
+-- Validation trigger function for users
+-- ===============================
+CREATE OR REPLACE FUNCTION validate_user_tenant_relationship()
+RETURNS TRIGGER AS $$
+DECLARE
+    tenant_role_id INT;
+BEGIN
+    SELECT id INTO tenant_role_id FROM user_roles WHERE role_name = 'Tenant';
+    IF tenant_role_id IS NULL THEN
+        RAISE EXCEPTION 'Tenant role not seeded in user_roles';
+    END IF;
+
+    IF NEW.role_id = tenant_role_id AND NEW.tenant_id IS NULL THEN
+        RAISE EXCEPTION 'Tenant users must be linked to a tenant record';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS validate_user_tenant_relationship_trigger ON users CASCADE;
+CREATE TRIGGER validate_user_tenant_relationship_trigger
+BEFORE INSERT OR UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION validate_user_tenant_relationship();
+
+-- ===============================
+-- Views
+-- ===============================
+DROP VIEW IF EXISTS lease_summary CASCADE;
+CREATE OR REPLACE VIEW lease_summary AS
+SELECT 
+    l.id AS lease_id,
+    l.lease_number,
+    p.property_name,
+    u.unit_number,
+    l.start_date,
+    l.end_date,
+    l.monthly_rent,
+    STRING_AGG(t.first_name || ' ' || t.last_name, ', ' ORDER BY lt.is_primary_tenant DESC) AS tenants,
+    l.lease_status
+FROM leases l
+JOIN units u ON l.unit_id = u.id
+JOIN properties p ON u.property_id = p.id
+JOIN lease_tenants lt ON l.id = lt.lease_id
+JOIN tenants t ON lt.tenant_id = t.id
+GROUP BY l.id, p.property_name, u.unit_number;
+
+DROP VIEW IF EXISTS tenant_portal_info CASCADE;
+CREATE OR REPLACE VIEW tenant_portal_info AS
+SELECT 
+    t.id AS tenant_id,
+    t.first_name,
+    t.last_name,
+    t.email,
+    u.username,
+    u.is_active,
+    l.lease_number,
+    l.lease_status,
+    l.start_date,
+    l.end_date,
+    l.monthly_rent,
+    p.property_name,
+    un.unit_number
+FROM tenants t
+JOIN users u ON t.id = u.tenant_id
+JOIN user_roles ur ON u.role_id = ur.id
+LEFT JOIN lease_tenants lt ON t.id = lt.tenant_id
+LEFT JOIN leases l ON lt.lease_id = l.id
+LEFT JOIN units un ON l.unit_id = un.id
+LEFT JOIN properties p ON un.property_id = p.id
+WHERE ur.role_name = 'Tenant';
+
+-- ===============================
+-- Comments
+-- ===============================
+COMMENT ON TABLE leases IS 'Stores lease agreements between tenants and landlords';
+COMMENT ON TABLE rent_payments IS 'Tracks rent payments for leases';
+COMMENT ON TABLE users IS 'System users including tenants, admins, and managers';
+COMMENT ON TABLE tenants IS 'Tenant personal information and rental history';
+COMMENT ON TABLE properties IS 'Properties managed in the system';
+COMMENT ON TABLE units IS 'Individual units within properties';
+

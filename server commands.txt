@@ -1,0 +1,11 @@
+# Create the directory structure
+sudo mkdir -p /home/files/rms-files/photos
+
+# Set proper ownership (replace 'your-user' with the actual user running Node.js)
+sudo chown -R your-user:your-user /home/files/rms-files
+
+# Set proper permissions
+sudo chmod -R 755 /home/files/rms-files
+
+# Verify the setup
+ls -la /home/files/rms-files/

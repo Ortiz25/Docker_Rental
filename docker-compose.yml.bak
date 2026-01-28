@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # Nginx Reverse Proxy
+  proxy:
+    build: ./nginx-proxy
+    container_name: rental-proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - SERVER_NAME=${SERVER_NAME:-localhost}
+    volumes:
+      - ./certs:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    depends_on:
+      - frontend
+    networks:
+      - rental-network
+
+  # Frontend Service
+  frontend:
+    build:
+      context: ./Rentalmgt-frontend
+      dockerfile: Dockerfile
+    container_name: rental-frontend
+    restart: always
+    expose:
+      - "80"
+    environment:
+      - NODE_ENV=production
+      - REACT_APP_API_URL=/backend
+    networks:
+      - rental-network
+
+  # Backend Service
+  backend:
+    build:
+      context: ./Rentalmgt--backend
+      dockerfile: Dockerfile
+    container_name: rental-backend
+    restart: always
+    expose:
+      - "5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-rental_db}
+      - DB_USER=${POSTGRES_USER:-postgres}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - JWT_SECRET=${JWT_SECRET:-your_jwt_secret_key_here}
+    volumes:
+      - ./Rentalmgt--backend:/app
+      - /app/node_modules
+    depends_on:
+      - postgres
+    networks:
+      - rental-network
+
+  # Database Service
+  postgres:
+    image: postgres:14-alpine
+    container_name: rental-postgres
+    restart: always
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-rental_db}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./upgradedDB.txt:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - rental-network
+
+  # Certbot for SSL
+  certbot:
+    image: certbot/certbot
+    container_name: rental-certbot
+    volumes:
+      - ./certs:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - rental-network
+
+  # PGAdmin (Optional)
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: rental-pgadmin
+    restart: always
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@example.com}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin}
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - rental-network
+
+networks:
+  rental-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  pgadmin_data:

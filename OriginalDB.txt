@@ -1,0 +1,1684 @@
+-- Property Management System Database Schema
+-- Simplified version with DROP/CREATE statements
+
+-- DROP SCHEMA IF EXISTS
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public AUTHORIZATION pg_database_owner;
+
+-- ==============================================
+-- DROP AND CREATE TABLES (Dependencies First)
+-- ==============================================
+
+-- Base lookup tables
+DROP TABLE IF EXISTS amenities CASCADE;
+CREATE TABLE amenities (
+    id serial PRIMARY KEY,
+    name varchar(100) NOT NULL UNIQUE,
+    description text
+);
+
+DROP TABLE IF EXISTS utilities CASCADE;
+CREATE TABLE utilities (
+    id serial PRIMARY KEY,
+    name varchar(100) NOT NULL UNIQUE,
+    description text
+);
+
+DROP TABLE IF EXISTS blacklist_categories CASCADE;
+CREATE TABLE blacklist_categories (
+    id serial PRIMARY KEY,
+    category_name varchar(100) NOT NULL UNIQUE,
+    description text,
+    default_severity varchar(20) DEFAULT 'medium',
+    is_active bool DEFAULT true,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TABLE IF EXISTS document_categories CASCADE;
+CREATE TABLE document_categories (
+    id serial PRIMARY KEY,
+    category_name varchar(100) NOT NULL UNIQUE,
+    description text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TABLE IF EXISTS expense_categories CASCADE;
+CREATE TABLE expense_categories (
+    id serial PRIMARY KEY,
+    category_name varchar(100) NOT NULL UNIQUE,
+    description text,
+    is_active bool DEFAULT true,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TABLE IF EXISTS user_roles CASCADE;
+CREATE TABLE user_roles (
+    id serial PRIMARY KEY,
+    role_name varchar(50) NOT NULL UNIQUE,
+    description text,
+    permissions jsonb,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Properties and related tables
+DROP TABLE IF EXISTS properties CASCADE;
+CREATE TABLE properties (
+    id serial PRIMARY KEY,
+    property_name varchar(255) NOT NULL,
+    address text NOT NULL,
+    property_type varchar(50) NOT NULL CHECK (property_type IN ('Apartment', 'House', 'Condominium', 'Townhouse', 'Studio', 'Other')),
+    total_units int DEFAULT 1,
+    size_sq_ft int,
+    monthly_rent numeric(10, 2),
+    security_deposit numeric(10, 2),
+    description text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TABLE IF EXISTS units CASCADE;
+CREATE TABLE units (
+    id serial PRIMARY KEY,
+    property_id int REFERENCES properties(id) ON DELETE CASCADE,
+    unit_number varchar(50),
+    bedrooms int DEFAULT 0 NOT NULL,
+    bathrooms numeric(3, 1) DEFAULT 0 NOT NULL,
+    size_sq_ft int,
+    monthly_rent numeric(10, 2),
+    security_deposit numeric(10, 2),
+    occupancy_status varchar(20) DEFAULT 'vacant' CHECK (occupancy_status IN ('occupied', 'vacant', 'maintenance')),
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(property_id, unit_number)
+);
+
+-- Tenants table
+DROP TABLE IF EXISTS tenants CASCADE;
+CREATE TABLE tenants (
+    id serial PRIMARY KEY,
+    first_name varchar(100) NOT NULL,
+    last_name varchar(100) NOT NULL,
+    email varchar(255) NOT NULL UNIQUE,
+    phone varchar(20),
+    alternate_phone varchar(20),
+    date_of_birth date,
+    identification_type varchar(50) CHECK (identification_type IN ('SSN', 'Driver License', 'Passport', 'National ID', 'Other')),
+    identification_number varchar(100),
+    emergency_contact_name varchar(200),
+    emergency_contact_phone varchar(20),
+    emergency_contact_relationship varchar(100),
+    employment_status varchar(50) CHECK (employment_status IN ('Employed', 'Self-Employed', 'Unemployed', 'Student', 'Retired')),
+    employer_name varchar(255),
+    employer_phone varchar(20),
+    monthly_income numeric(10, 2),
+    previous_address text,
+    is_blacklisted bool DEFAULT false,
+    blacklist_reason text,
+    blacklisted_date timestamp,
+    blacklisted_by varchar(255),
+    blacklist_notes text,
+    blacklist_severity varchar(20) CHECK (blacklist_severity IN ('low', 'medium', 'high', 'severe')),
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Users table
+DROP TABLE IF EXISTS users CASCADE;
+CREATE TABLE users (
+    id serial PRIMARY KEY,
+    username varchar(100) NOT NULL UNIQUE,
+    email varchar(255) NOT NULL UNIQUE,
+    password_hash varchar(255) NOT NULL,
+    first_name varchar(100) NOT NULL,
+    last_name varchar(100) NOT NULL,
+    phone varchar(20),
+    role_id int REFERENCES user_roles(id) ON DELETE RESTRICT,
+    tenant_id int REFERENCES tenants(id) ON DELETE SET NULL,
+    is_active bool DEFAULT true,
+    is_verified bool DEFAULT false,
+    last_login timestamp,
+    password_reset_token varchar(255),
+    password_reset_expires timestamp,
+    email_verification_token varchar(255),
+    email_verification_expires timestamp,
+    two_factor_enabled bool DEFAULT false,
+    two_factor_secret varchar(255),
+    failed_login_attempts int DEFAULT 0,
+    locked_until timestamp,
+    profile_image_url varchar(500),
+    timezone varchar(50) DEFAULT 'Africa/Nairobi',
+    language varchar(10) DEFAULT 'en',
+    notification_preferences jsonb DEFAULT '{"sms": false, "push": true, "email": true}',
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Leases table
+DROP TABLE IF EXISTS leases CASCADE;
+CREATE TABLE leases (
+    id serial PRIMARY KEY,
+    unit_id int REFERENCES units(id) ON DELETE RESTRICT,
+    lease_number varchar(100) NOT NULL UNIQUE,
+    lease_type varchar(50) DEFAULT 'Fixed Term' CHECK (lease_type IN ('Fixed Term', 'Month-to-Month', 'Week-to-Week')),
+    lease_status varchar(50) DEFAULT 'active' CHECK (lease_status IN ('draft', 'active', 'expired', 'terminated', 'renewed')),
+    start_date date NOT NULL,
+    end_date date,
+    monthly_rent numeric(10, 2) NOT NULL,
+    security_deposit numeric(10, 2) NOT NULL,
+    pet_deposit numeric(10, 2) DEFAULT 0,
+    late_fee numeric(10, 2) DEFAULT 0,
+    grace_period_days int DEFAULT 5,
+    rent_due_day int DEFAULT 1 CHECK (rent_due_day >= 1 AND rent_due_day <= 31),
+    lease_terms text,
+    special_conditions text,
+    signed_date date,
+    move_in_date date,
+    move_out_date date,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CHECK (end_date IS NULL OR end_date > start_date),
+    CHECK (move_in_date IS NULL OR move_in_date >= start_date),
+    CHECK (move_out_date IS NULL OR move_out_date >= move_in_date)
+);
+
+-- Junction tables
+DROP TABLE IF EXISTS lease_tenants CASCADE;
+CREATE TABLE lease_tenants (
+    id serial PRIMARY KEY,
+    lease_id int REFERENCES leases(id) ON DELETE CASCADE,
+    tenant_id int REFERENCES tenants(id) ON DELETE CASCADE,
+    is_primary_tenant bool DEFAULT false,
+    tenant_type varchar(50) DEFAULT 'Tenant' CHECK (tenant_type IN ('Tenant', 'Co-Tenant', 'Guarantor', 'Occupant')),
+    added_date date DEFAULT CURRENT_DATE,
+    removed_date date,
+    UNIQUE(lease_id, tenant_id),
+    CHECK (removed_date IS NULL OR removed_date >= added_date)
+);
+
+DROP TABLE IF EXISTS property_amenities CASCADE;
+CREATE TABLE property_amenities (
+    id serial PRIMARY KEY,
+    property_id int REFERENCES properties(id) ON DELETE CASCADE,
+    amenity_id int REFERENCES amenities(id) ON DELETE CASCADE,
+    UNIQUE(property_id, amenity_id)
+);
+
+DROP TABLE IF EXISTS property_utilities CASCADE;
+CREATE TABLE property_utilities (
+    id serial PRIMARY KEY,
+    property_id int REFERENCES properties(id) ON DELETE CASCADE,
+    utility_id int REFERENCES utilities(id) ON DELETE CASCADE,
+    included bool DEFAULT false,
+    UNIQUE(property_id, utility_id)
+);
+
+DROP TABLE IF EXISTS unit_utilities CASCADE;
+CREATE TABLE unit_utilities (
+    id serial PRIMARY KEY,
+    unit_id int REFERENCES units(id) ON DELETE CASCADE,
+    utility_id int REFERENCES utilities(id) ON DELETE CASCADE,
+    included bool DEFAULT false,
+    UNIQUE(unit_id, utility_id)
+);
+
+-- Financial tables
+DROP TABLE IF EXISTS rent_payments CASCADE;
+CREATE TABLE rent_payments (
+    id serial PRIMARY KEY,
+    lease_id int REFERENCES leases(id) ON DELETE RESTRICT,
+    payment_date date,
+    due_date date NOT NULL,
+    amount_due numeric(10, 2) NOT NULL,
+    amount_paid numeric(10, 2) DEFAULT 0,
+    payment_method varchar(50) CHECK (payment_method IN ('Cash', 'Check', 'Bank Transfer', 'Credit Card', 'Online Payment', 'Money Order', 'M-Pesa', 'Airtel Money', 'Other')),
+    payment_reference varchar(255),
+    late_fee numeric(10, 2) DEFAULT 0,
+    payment_status varchar(50) DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'partial', 'overdue', 'failed')),
+    notes text,
+    processed_by varchar(255),
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((payment_status IN ('paid', 'partial') AND payment_date IS NOT NULL) OR payment_status IN ('pending', 'overdue'))
+);
+
+DROP TABLE IF EXISTS payment_submissions CASCADE;
+CREATE TABLE payment_submissions (
+    id serial PRIMARY KEY,
+    tenant_id int REFERENCES tenants(id) ON DELETE CASCADE,
+    lease_id int REFERENCES leases(id) ON DELETE CASCADE,
+    amount numeric(10, 2) NOT NULL CHECK (amount > 0),
+    payment_method varchar(50) NOT NULL CHECK (payment_method IN ('bank_transfer', 'mpesa', 'airtel_money', 'cash', 'check', 'other')),
+    transaction_reference varchar(255) NOT NULL,
+    transaction_date date NOT NULL CHECK (transaction_date <= CURRENT_DATE),
+    submission_date timestamp DEFAULT CURRENT_TIMESTAMP,
+    submitted_by int REFERENCES users(id) ON DELETE SET NULL,
+    verification_status varchar(50) DEFAULT 'pending' CHECK (verification_status IN ('pending', 'verified', 'rejected', 'under_review')),
+    verified_date timestamp,
+    verified_by int REFERENCES users(id) ON DELETE SET NULL,
+    notes text,
+    admin_notes text,
+    attachment_urls text[],
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CHECK (
+        (verification_status = 'pending' AND verified_date IS NULL AND verified_by IS NULL) OR
+        (verification_status IN ('verified', 'rejected') AND verified_date IS NOT NULL AND verified_by IS NOT NULL)
+    )
+);
+
+DROP TABLE IF EXISTS security_deposits CASCADE;
+CREATE TABLE security_deposits (
+    id serial PRIMARY KEY,
+    lease_id int REFERENCES leases(id) ON DELETE RESTRICT,
+    deposit_type varchar(50) DEFAULT 'Security' CHECK (deposit_type IN ('Security', 'Pet', 'Key', 'Cleaning', 'Other')),
+    amount_collected numeric(10, 2) NOT NULL,
+    collection_date date NOT NULL,
+    amount_returned numeric(10, 2) DEFAULT 0,
+    return_date date,
+    deductions numeric(10, 2) DEFAULT 0,
+    deduction_reason text,
+    status varchar(50) DEFAULT 'held' CHECK (status IN ('held', 'partially_returned', 'fully_returned', 'forfeited')),
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CHECK (amount_returned <= amount_collected),
+    CHECK (return_date IS NULL OR return_date >= collection_date)
+);
+
+DROP TABLE IF EXISTS property_expenses CASCADE;
+CREATE TABLE property_expenses (
+    id serial PRIMARY KEY,
+    property_id int REFERENCES properties(id) ON DELETE CASCADE,
+    category_id int REFERENCES expense_categories(id),
+    expense_type varchar(100) NOT NULL,
+    amount numeric(10, 2) NOT NULL CHECK (amount > 0),
+    frequency varchar(20) DEFAULT 'monthly' CHECK (frequency IN ('monthly', 'quarterly', 'annual', 'one-time')),
+    start_date date DEFAULT CURRENT_DATE,
+    end_date date,
+    is_active bool DEFAULT true,
+    description text,
+    created_by varchar(255),
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CHECK (end_date IS NULL OR end_date > start_date)
+);
+
+-- Maintenance table
+DROP TABLE IF EXISTS maintenance_requests CASCADE;
+CREATE TABLE maintenance_requests (
+    id serial PRIMARY KEY,
+    unit_id int REFERENCES units(id) ON DELETE RESTRICT,
+    tenant_id int REFERENCES tenants(id) ON DELETE SET NULL,
+    lease_id int REFERENCES leases(id) ON DELETE SET NULL,
+    request_title varchar(255) NOT NULL,
+    description text NOT NULL,
+    priority varchar(20) DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'emergency')),
+    category varchar(100) CHECK (category IN ('Plumbing', 'Electrical', 'HVAC', 'Appliances', 'Structural', 'Pest Control', 'Cleaning', 'Security', 'Other')),
+    status varchar(50) DEFAULT 'open' CHECK (status IN ('open', 'in_progress', 'completed', 'cancelled', 'on_hold')),
+    requested_date timestamp DEFAULT CURRENT_TIMESTAMP,
+    scheduled_date timestamp,
+    completed_date timestamp,
+    estimated_cost numeric(10, 2),
+    actual_cost numeric(10, 2),
+    assigned_to varchar(255),
+    tenant_notes text,
+    management_notes text,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CHECK (completed_date IS NULL OR DATE(completed_date) >= DATE(requested_date))
+);
+
+-- Document management tables
+DROP TABLE IF EXISTS documents CASCADE;
+CREATE TABLE documents (
+    id serial PRIMARY KEY,
+    document_name varchar(255) NOT NULL,
+    original_filename varchar(255) NOT NULL,
+    file_path varchar(500) NOT NULL,
+    file_size bigint NOT NULL,
+    file_type varchar(10) NOT NULL,
+    mime_type varchar(100) NOT NULL,
+    category_id int REFERENCES document_categories(id) ON DELETE SET NULL,
+    property_id int REFERENCES properties(id) ON DELETE CASCADE,
+    unit_id int REFERENCES units(id) ON DELETE CASCADE,
+    tenant_id int REFERENCES tenants(id) ON DELETE CASCADE,
+    lease_id int REFERENCES leases(id) ON DELETE CASCADE,
+    document_status varchar(50) DEFAULT 'active' CHECK (document_status IN ('active', 'archived', 'deleted')),
+    is_shared bool DEFAULT false,
+    is_important bool DEFAULT false,
+    tags text[],
+    uploaded_by varchar(255),
+    uploaded_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    last_accessed timestamp,
+    access_count int DEFAULT 0,
+    version_number int DEFAULT 1,
+    parent_document_id int REFERENCES documents(id) ON DELETE SET NULL,
+    expires_at date,
+    description text,
+    notes text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((property_id IS NOT NULL) OR (unit_id IS NOT NULL) OR (tenant_id IS NOT NULL) OR (lease_id IS NOT NULL))
+);
+
+-- System tables
+DROP TABLE IF EXISTS user_sessions CASCADE;
+CREATE TABLE user_sessions (
+    id serial PRIMARY KEY,
+    user_id int REFERENCES users(id) ON DELETE CASCADE,
+    session_token text NOT NULL UNIQUE,
+    device_info text,
+    ip_address inet,
+    user_agent text,
+    is_active bool DEFAULT true,
+    expires_at timestamp NOT NULL,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    last_activity timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TABLE IF EXISTS user_notifications CASCADE;
+CREATE TABLE user_notifications (
+    id serial PRIMARY KEY,
+    user_id int REFERENCES users(id) ON DELETE CASCADE,
+    notification_type varchar(100) NOT NULL,
+    title varchar(255) NOT NULL,
+    message text NOT NULL,
+    is_read bool DEFAULT false,
+    is_urgent bool DEFAULT false,
+    related_resource_type varchar(100),
+    related_resource_id int,
+    -- Announcement targeting fields
+    target_scope VARCHAR(50) DEFAULT 'user_specific' CHECK (target_scope IN ('all_tenants', 'property_specific', 'user_specific')),
+    target_property_id INTEGER REFERENCES properties(id) ON DELETE SET NULL,
+    target_user_ids INTEGER[],
+    -- Scheduling fields
+    status VARCHAR(50) DEFAULT 'sent' CHECK (status IN ('draft', 'scheduled', 'sent', 'cancelled')),
+    scheduled_for timestamp DEFAULT CURRENT_TIMESTAMP,
+    sent_at timestamp,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    -- Delivery settings
+    delivery_method varchar(50) DEFAULT 'in_app' CHECK (delivery_method IN ('in_app', 'email', 'sms', 'push')),
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+
+DROP TABLE IF EXISTS user_activity_log CASCADE;
+CREATE TABLE user_activity_log (
+    id serial PRIMARY KEY,
+    user_id int REFERENCES users(id) ON DELETE SET NULL,
+    activity_type varchar(100) NOT NULL,
+    activity_description text,
+    affected_resource_type varchar(100),
+    affected_resource_id int,
+    ip_address inet,
+    user_agent text,
+    activity_timestamp timestamp DEFAULT CURRENT_TIMESTAMP,
+    additional_data jsonb
+);
+
+-- History/audit tables
+DROP TABLE IF EXISTS tenant_blacklist_history CASCADE;
+CREATE TABLE tenant_blacklist_history (
+    id serial PRIMARY KEY,
+    tenant_id int REFERENCES tenants(id) ON DELETE CASCADE,
+    action varchar(50) NOT NULL CHECK (action IN ('blacklisted', 'removed', 'updated', 'note_added')),
+    reason text,
+    severity varchar(20) CHECK (severity IN ('low', 'medium', 'high', 'severe')),
+    notes text,
+    evidence_documents text[],
+    performed_by varchar(255),
+    performed_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    previous_status bool,
+    ip_address inet,
+    additional_data jsonb
+);
+
+DROP TABLE IF EXISTS blacklist_security_log CASCADE;
+CREATE TABLE blacklist_security_log (
+    id serial PRIMARY KEY,
+    event_type varchar(50) NOT NULL,
+    user_id int REFERENCES users(id),
+    target_tenant_id int REFERENCES tenants(id),
+    ip_address inet,
+    user_agent text,
+    request_details jsonb,
+    severity varchar(20) DEFAULT 'medium',
+    event_timestamp timestamp DEFAULT CURRENT_TIMESTAMP,
+    resolved bool DEFAULT false
+);
+
+DROP TABLE IF EXISTS cron_job_log CASCADE;
+CREATE TABLE cron_job_log (
+    id serial PRIMARY KEY,
+    job_name varchar(100) NOT NULL,
+    execution_time timestamp DEFAULT CURRENT_TIMESTAMP,
+    success bool DEFAULT true,
+    error_message text,
+    records_affected int
+);
+
+-- ===============================
+-- Communications (merged)
+-- ===============================
+DROP TABLE IF EXISTS communications CASCADE;
+CREATE TABLE communications (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER,                -- keep tenant association where needed
+    lease_id INTEGER,
+    sender_id INTEGER,                -- user id
+    recipient_id INTEGER,             -- user id
+    communication_type VARCHAR(50) DEFAULT 'Email'
+        CHECK (communication_type IN ('Email','Phone Call','Text Message','In-Person','Letter','Notice','Other')),
+    subject VARCHAR(255),
+    message_content TEXT,
+    direction VARCHAR(20)             -- inbound/outbound
+        CHECK (direction IN ('inbound','outbound')),
+    communication_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    staff_member VARCHAR(255),
+    follow_up_required BOOLEAN DEFAULT false,
+    follow_up_date DATE,
+    CONSTRAINT communications_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    CONSTRAINT communications_lease_id_fkey FOREIGN KEY (lease_id) REFERENCES leases(id) ON DELETE CASCADE,
+    CONSTRAINT communications_sender_id_fkey FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE SET NULL,
+    CONSTRAINT communications_recipient_id_fkey FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX idx_communications_tenant ON communications(tenant_id);
+CREATE INDEX idx_communications_lease ON communications(lease_id);
+CREATE INDEX idx_communications_date ON communications(communication_date);
+
+-- ===============================
+-- Tenant documents (specific attachments)
+-- ===============================
+DROP TABLE IF EXISTS tenant_documents CASCADE;
+CREATE TABLE tenant_documents (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER,
+    lease_id INTEGER,
+    document_type VARCHAR(100) NOT NULL,
+    document_name VARCHAR(255) NOT NULL,
+    file_path VARCHAR(500),
+    file_size INTEGER,
+    mime_type VARCHAR(100),
+    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    uploaded_by VARCHAR(100),
+    CONSTRAINT tenant_documents_check CHECK (tenant_id IS NOT NULL OR lease_id IS NOT NULL),
+    CONSTRAINT tenant_documents_document_type_check CHECK (document_type IN (
+        'ID Copy','Income Proof','Employment Letter','Bank Statement','Credit Report','Reference Letter','Lease Agreement','Other'
+    )),
+    CONSTRAINT tenant_documents_lease_id_fkey FOREIGN KEY (lease_id) REFERENCES leases(id) ON DELETE CASCADE,
+    CONSTRAINT tenant_documents_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    CONSTRAINT tenant_documents_uploaded_by_fkey FOREIGN KEY (uploaded_by) REFERENCES users(username) ON DELETE SET NULL
+);
+CREATE INDEX idx_tenant_documents_tenant ON tenant_documents(tenant_id);
+CREATE INDEX idx_tenant_documents_lease ON tenant_documents(lease_id);
+
+-- Add after the documents table
+DROP TABLE IF EXISTS property_photos CASCADE;
+CREATE TABLE property_photos (
+    id serial PRIMARY KEY,
+    property_id int REFERENCES properties(id) ON DELETE CASCADE,
+    file_name varchar(255) NOT NULL,
+    file_path varchar(500) NOT NULL,
+    file_size bigint NOT NULL,
+    mime_type varchar(100) NOT NULL,
+    is_primary bool DEFAULT false,
+    display_order int DEFAULT 0,
+    caption text,
+    uploaded_by int REFERENCES users(id) ON DELETE SET NULL,
+    uploaded_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_property_photos_property ON property_photos(property_id);
+CREATE INDEX idx_property_photos_primary ON property_photos(is_primary);
+
+-- Add trigger for updated_at
+CREATE TRIGGER update_property_photos_updated_at 
+    BEFORE UPDATE ON property_photos 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+
+
+-- ==============================================
+-- CREATE INDEXES
+-- ==============================================
+
+-- Properties
+CREATE INDEX idx_properties_type ON properties(property_type);
+
+-- Units
+CREATE INDEX idx_units_property_id ON units(property_id);
+CREATE INDEX idx_units_occupancy ON units(occupancy_status);
+CREATE INDEX idx_units_bedrooms ON units(bedrooms);
+
+-- Tenants
+CREATE INDEX idx_tenants_email ON tenants(email);
+CREATE INDEX idx_tenants_name ON tenants(last_name, first_name);
+CREATE INDEX idx_tenants_blacklisted ON tenants(is_blacklisted);
+CREATE INDEX idx_tenants_blacklist_severity ON tenants(blacklist_severity);
+
+-- Users
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_role_id ON users(role_id);
+CREATE INDEX idx_users_tenant_id ON users(tenant_id);
+CREATE INDEX idx_users_is_active ON users(is_active);
+
+-- Leases
+CREATE INDEX idx_leases_unit ON leases(unit_id);
+CREATE INDEX idx_leases_status ON leases(lease_status);
+CREATE INDEX idx_leases_dates ON leases(start_date, end_date);
+
+-- Rent Payments
+CREATE INDEX idx_rent_payments_lease ON rent_payments(lease_id);
+CREATE INDEX idx_rent_payments_status ON rent_payments(payment_status);
+CREATE INDEX idx_rent_payments_due_date ON rent_payments(due_date);
+CREATE INDEX idx_rent_payments_lease_status ON rent_payments(lease_id, payment_status);
+CREATE INDEX idx_rent_payments_date_range ON rent_payments(due_date, payment_status);
+CREATE INDEX idx_rent_payments_status_due_date ON rent_payments(payment_status, due_date);
+
+-- Payment Submissions
+CREATE INDEX idx_payment_submissions_tenant ON payment_submissions(tenant_id);
+CREATE INDEX idx_payment_submissions_lease ON payment_submissions(lease_id);
+CREATE INDEX idx_payment_submissions_status ON payment_submissions(verification_status);
+CREATE INDEX idx_payment_submissions_submission_date ON payment_submissions(submission_date);
+CREATE INDEX idx_payment_submissions_verified_date ON payment_submissions(verified_date);
+
+-- Property Expenses
+CREATE INDEX idx_property_expenses_property_id ON property_expenses(property_id);
+CREATE INDEX idx_property_expenses_type ON property_expenses(expense_type);
+CREATE INDEX idx_property_expenses_active ON property_expenses(is_active);
+CREATE INDEX idx_property_expenses_dates ON property_expenses(start_date, end_date);
+
+-- Maintenance Requests
+CREATE INDEX idx_maintenance_requests_unit ON maintenance_requests(unit_id);
+CREATE INDEX idx_maintenance_requests_status ON maintenance_requests(status);
+CREATE INDEX idx_maintenance_requests_priority ON maintenance_requests(priority);
+
+-- Documents
+CREATE INDEX idx_documents_property ON documents(property_id);
+CREATE INDEX idx_documents_unit ON documents(unit_id);
+CREATE INDEX idx_documents_tenant ON documents(tenant_id);
+CREATE INDEX idx_documents_lease ON documents(lease_id);
+CREATE INDEX idx_documents_category ON documents(category_id);
+CREATE INDEX idx_documents_status ON documents(document_status);
+CREATE INDEX idx_documents_file_type ON documents(file_type);
+CREATE INDEX idx_documents_uploaded_at ON documents(uploaded_at);
+CREATE INDEX idx_documents_expires_at ON documents(expires_at);
+CREATE INDEX idx_documents_tags ON documents USING gin(tags);
+
+-- System tables
+CREATE INDEX idx_user_sessions_token ON user_sessions(session_token);
+CREATE INDEX idx_user_sessions_user_id ON user_sessions(user_id);
+CREATE INDEX idx_user_sessions_expires ON user_sessions(expires_at);
+
+CREATE INDEX idx_user_notifications_user_id ON user_notifications(user_id);
+CREATE INDEX idx_user_notifications_is_read ON user_notifications(is_read);
+
+CREATE INDEX idx_user_activity_user_id ON user_activity_log(user_id);
+CREATE INDEX idx_user_activity_timestamp ON user_activity_log(activity_timestamp);
+
+-- History tables
+CREATE INDEX idx_blacklist_history_tenant ON tenant_blacklist_history(tenant_id);
+CREATE INDEX idx_blacklist_history_action ON tenant_blacklist_history(action);
+CREATE INDEX idx_blacklist_history_date ON tenant_blacklist_history(performed_at);
+
+CREATE INDEX idx_blacklist_security_log_user ON blacklist_security_log(user_id);
+CREATE INDEX idx_blacklist_security_log_event ON blacklist_security_log(event_type);
+CREATE INDEX idx_blacklist_security_log_timestamp ON blacklist_security_log(event_timestamp);
+
+-- Junction table indexes
+CREATE INDEX idx_property_amenities_property ON property_amenities(property_id);
+CREATE INDEX idx_property_utilities_property ON property_utilities(property_id);
+CREATE INDEX idx_unit_utilities_unit ON unit_utilities(unit_id);
+CREATE INDEX idx_lease_tenants_lease ON lease_tenants(lease_id);
+CREATE INDEX idx_lease_tenants_tenant ON lease_tenants(tenant_id);
+
+-- ==============================================
+-- CREATE FUNCTIONS
+-- ==============================================
+
+-- Update timestamp trigger function
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create default unit for single-unit properties
+CREATE OR REPLACE FUNCTION create_default_unit()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- For single-unit properties (not apartments), create a default unit
+    IF NEW.property_type != 'Apartment' AND NEW.total_units = 1 THEN
+        INSERT INTO units (
+            property_id, 
+            unit_number, 
+            bedrooms, 
+            bathrooms, 
+            size_sq_ft,
+            monthly_rent,
+            security_deposit
+        ) VALUES (
+            NEW.id,
+            'Main',
+            0,
+            0,
+            NEW.size_sq_ft,
+            NEW.monthly_rent,
+            NEW.security_deposit
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Generate lease number
+CREATE OR REPLACE FUNCTION generate_lease_number()
+RETURNS TRIGGER AS $$
+DECLARE
+    property_code VARCHAR(10);
+    unit_code VARCHAR(10);
+    year_code VARCHAR(4);
+    sequence_num INTEGER;
+    new_lease_number VARCHAR(100);
+BEGIN
+    -- Get property and unit info
+    SELECT 
+        UPPER(LEFT(REPLACE(p.property_name, ' ', ''), 3)),
+        COALESCE(u.unit_number, 'MAIN'),
+        EXTRACT(YEAR FROM CURRENT_DATE)::VARCHAR
+    INTO property_code, unit_code, year_code
+    FROM units u
+    JOIN properties p ON u.property_id = p.id
+    WHERE u.id = NEW.unit_id;
+    
+    -- Get next sequence number for this property/year
+    SELECT COALESCE(MAX(CAST(RIGHT(lease_number, 3) AS INTEGER)), 0) + 1
+    INTO sequence_num
+    FROM leases l
+    JOIN units u ON l.unit_id = u.id
+    JOIN properties p ON u.property_id = p.id
+    WHERE l.lease_number LIKE property_code || '%' || year_code || '%';
+    
+    -- Generate lease number: PROPERTYCODE-UNITCODE-YEAR-SEQUENCE
+    new_lease_number := property_code || '-' || unit_code || '-' || year_code || '-' || LPAD(sequence_num::VARCHAR, 3, '0');
+    
+    NEW.lease_number := new_lease_number;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+--
+CREATE OR REPLACE FUNCTION mark_overdue_rent_payments()
+RETURNS INTEGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    affected_rows INTEGER;
+BEGIN
+    UPDATE rent_payments rp
+    SET
+        payment_status = 'overdue',
+        updated_at = NOW()
+    FROM leases l
+    WHERE rp.lease_id = l.id
+      AND rp.payment_status IN ('pending', 'partial')
+      AND CURRENT_DATE > (rp.due_date + l.grace_period_days);
+
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+
+    RETURN affected_rows;
+END;
+$$;
+
+
+-- Update unit occupancy based on lease status
+CREATE OR REPLACE FUNCTION update_unit_occupancy()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- When lease becomes active, mark unit as occupied
+    IF NEW.lease_status = 'active' AND (OLD.lease_status IS NULL OR OLD.lease_status != 'active') THEN
+        UPDATE units SET occupancy_status = 'occupied' WHERE id = NEW.unit_id;
+    END IF;
+    
+    -- When lease ends/terminates, mark unit as vacant (if no other active leases)
+    IF NEW.lease_status IN ('expired', 'terminated') AND OLD.lease_status = 'active' THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM leases 
+            WHERE unit_id = NEW.unit_id 
+            AND lease_status = 'active' 
+            AND id != NEW.id
+        ) THEN
+            UPDATE units SET occupancy_status = 'vacant' WHERE id = NEW.unit_id;
+        END IF;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Set payment date when status changes
+CREATE OR REPLACE FUNCTION set_payment_date()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- If status is being changed to paid or partial and payment_date is null, set it to current date
+    IF NEW.payment_status IN ('paid', 'partial') AND NEW.payment_date IS NULL THEN
+        NEW.payment_date = CURRENT_DATE;
+    END IF;
+    
+    -- If status is being changed to pending or overdue, clear payment_date
+    IF NEW.payment_status IN ('pending', 'overdue') THEN
+        NEW.payment_date = NULL;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Log blacklist changes
+CREATE OR REPLACE FUNCTION log_blacklist_change()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Only log if blacklist status actually changed
+    IF OLD.is_blacklisted != NEW.is_blacklisted THEN
+        INSERT INTO tenant_blacklist_history (
+            tenant_id,
+            action,
+            reason,
+            severity,
+            notes,
+            performed_by,
+            previous_status
+        ) VALUES (
+            NEW.id,
+            CASE WHEN NEW.is_blacklisted THEN 'blacklisted' ELSE 'removed' END,
+            NEW.blacklist_reason,
+            NEW.blacklist_severity,
+            NEW.blacklist_notes,
+            COALESCE(NEW.blacklisted_by, 'system'),
+            OLD.is_blacklisted
+        );
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Validate user-tenant relationship
+CREATE OR REPLACE FUNCTION validate_user_tenant_relationship()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- If role is 'Tenant', tenant_id must not be NULL
+    IF NEW.role_id = (SELECT id FROM user_roles WHERE role_name = 'Tenant') THEN
+        IF NEW.tenant_id IS NULL THEN
+            RAISE EXCEPTION 'Users with Tenant role must have a tenant_id';
+        END IF;
+    END IF;
+    
+    -- If role is not 'Tenant', tenant_id must be NULL
+    IF NEW.role_id != (SELECT id FROM user_roles WHERE role_name = 'Tenant') THEN
+        IF NEW.tenant_id IS NOT NULL THEN
+            RAISE EXCEPTION 'Users with non-Tenant roles cannot have a tenant_id';
+        END IF;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Process verified payment submissions
+CREATE OR REPLACE FUNCTION process_verified_payment_submission()
+RETURNS TRIGGER AS $$
+DECLARE
+    unpaid_payment_id INTEGER;
+    remaining_amount NUMERIC(10,2);
+    payment_amount NUMERIC(10,2);
+    new_total_paid NUMERIC(10,2);
+    total_due NUMERIC(10,2);
+    new_status VARCHAR(50);
+    mapped_payment_method VARCHAR(50);
+BEGIN
+    IF NEW.verification_status = 'verified'
+       AND OLD.verification_status IS DISTINCT FROM 'verified' THEN
+
+        -- Map payment method
+        mapped_payment_method := CASE NEW.payment_method
+            WHEN 'mpesa' THEN 'M-Pesa'
+            WHEN 'airtel_money' THEN 'Airtel Money'
+            WHEN 'bank_transfer' THEN 'Bank Transfer'
+            WHEN 'cash' THEN 'Cash'
+            WHEN 'check' THEN 'Check'
+            ELSE 'Other'
+        END;
+
+        -- Find oldest unpaid or partial rent (FIFO)
+        SELECT
+            id,
+            (amount_due + COALESCE(utilities_charges, 0) - amount_paid),
+            (amount_due + COALESCE(utilities_charges, 0))
+        INTO unpaid_payment_id, remaining_amount, total_due
+        FROM rent_payments
+        WHERE lease_id = NEW.lease_id
+          AND payment_status IN ('pending', 'partial', 'overdue')
+        ORDER BY due_date ASC
+        LIMIT 1
+        FOR UPDATE;
+
+        IF unpaid_payment_id IS NOT NULL THEN
+
+            payment_amount := LEAST(NEW.amount, remaining_amount);
+
+            SELECT amount_paid + payment_amount
+            INTO new_total_paid
+            FROM rent_payments
+            WHERE id = unpaid_payment_id;
+
+            -- Final status decision ✅ NOW UTILITIES-AWARE
+            new_status := CASE
+                WHEN new_total_paid >= total_due THEN 'paid'
+                ELSE 'partial'
+            END;
+
+            UPDATE rent_payments
+            SET
+                amount_paid = new_total_paid,
+                payment_status = new_status,
+                payment_method = mapped_payment_method,
+                payment_reference = NEW.transaction_reference,
+                payment_date = NEW.transaction_date,
+                processed_by = NEW.verified_by::VARCHAR,
+                processed_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = unpaid_payment_id;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Set maintenance completion details
+CREATE OR REPLACE FUNCTION set_maintenance_completion_details()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.status = 'completed' AND OLD.status IS DISTINCT FROM 'completed' THEN
+        -- Set actual_cost if not provided
+        IF NEW.actual_cost IS NULL THEN
+            NEW.actual_cost := NEW.estimated_cost;
+        END IF;
+
+        -- Set completed_date to today if not provided
+        IF NEW.completed_date IS NULL THEN
+            NEW.completed_date := CURRENT_DATE;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Drop and recreate the function with improvements
+DROP FUNCTION IF EXISTS public.generate_monthly_rent_payments();
+
+    -- Loop through all active leases
+    FOR lease_record IN 
+        SELECT 
+            l.id,
+            l.unit_id,
+            l.monthly_rent,
+            l.rent_due_day,
+            l.start_date,
+            l.end_date,
+            l.lease_status,CREATE OR REPLACE FUNCTION public.generate_monthly_rent_payments()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    lease_record RECORD;
+    next_due_date DATE;
+    current_month_start DATE;
+    next_month_start DATE;
+    affected_rows INTEGER := 0;
+    system_user_id INTEGER;
+BEGIN
+    -- Get the first day of current and next month for proper date calculations
+    current_month_start := DATE_TRUNC('month', CURRENT_DATE);
+    next_month_start := current_month_start + INTERVAL '1 month';
+    
+    -- Try to get a system user ID for logging (optional - function works without it)
+    SELECT id INTO system_user_id 
+    FROM users 
+    WHERE username = 'system' OR role_id = (SELECT id FROM user_roles WHERE role_name = 'Admin')
+    LIMIT 1;
+    
+
+            l.late_fee
+        FROM leases l
+        WHERE l.lease_status = 'active'
+        AND (l.end_date IS NULL OR l.end_date >= CURRENT_DATE)
+        AND l.start_date <= CURRENT_DATE  -- Lease must have started
+    LOOP
+        -- Calculate next due date - always generate for next month
+        -- This ensures we're preparing upcoming payments
+        next_due_date := next_month_start + INTERVAL '1 day' * (lease_record.rent_due_day - 1);
+        
+        -- Validate the due date doesn't exceed month boundaries
+        IF next_due_date >= (next_month_start + INTERVAL '1 month') THEN
+            -- If rent_due_day is beyond the days in the month, use last day of month
+            next_due_date := (next_month_start + INTERVAL '1 month' - INTERVAL '1 day');
+        END IF;
+        
+        -- Only create if this rent payment doesn't already exist
+        IF NOT EXISTS (
+            SELECT 1 FROM rent_payments 
+            WHERE lease_id = lease_record.id 
+            AND due_date = next_due_date
+        ) THEN
+            -- Insert new rent payment record
+            INSERT INTO rent_payments (
+                lease_id,
+                due_date,
+                amount_due,
+                amount_paid,
+                late_fee,
+                payment_status,
+                created_at
+            ) VALUES (
+                lease_record.id,
+                next_due_date,
+                lease_record.monthly_rent,
+                0,
+                COALESCE(lease_record.late_fee, 0),
+                'pending',  -- Always start as pending since it's for future month
+                CURRENT_TIMESTAMP
+            );
+            
+            affected_rows := affected_rows + 1;
+        END IF;
+    END LOOP;
+    
+    -- Log the execution in cron_job_log
+    INSERT INTO cron_job_log (job_name, records_affected, success)
+    VALUES ('generate_monthly_rent_payments', affected_rows, true);
+    
+    -- Optional: Log in user_activity_log if we have a system user
+    IF system_user_id IS NOT NULL THEN
+        INSERT INTO user_activity_log (
+            user_id,
+            activity_type,
+            activity_description,
+            affected_resource_type
+        ) VALUES (
+            system_user_id,
+            'system_rent_generation',
+            'Generated ' || affected_rows || ' rent payment records for ' || TO_CHAR(next_due_date, 'Month YYYY'),
+            'rent_payment'
+        );
+    END IF;
+    
+EXCEPTION WHEN OTHERS THEN
+    -- Log any errors
+    INSERT INTO cron_job_log (job_name, success, error_message, records_affected)
+    VALUES ('generate_monthly_rent_payments', false, SQLERRM, affected_rows);
+    
+    -- Re-raise the exception for debugging
+    RAISE NOTICE 'Error in generate_monthly_rent_payments: %', SQLERRM;
+    RAISE;
+END;
+$$;
+
+-- Also create a companion function to mark overdue payments
+CREATE OR REPLACE FUNCTION public.update_overdue_rent_payments()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    updated_rows INTEGER := 0;
+BEGIN
+    -- Update payments that are past due (considering grace period)
+    UPDATE rent_payments rp
+    SET 
+        payment_status = 'overdue',
+        updated_at = CURRENT_TIMESTAMP
+    FROM leases l
+    WHERE rp.lease_id = l.id
+    AND rp.payment_status = 'pending'
+    AND rp.due_date + COALESCE(l.grace_period_days, 0) < CURRENT_DATE;
+    
+    GET DIAGNOSTICS updated_rows = ROW_COUNT;
+    
+    -- Log the execution
+    INSERT INTO cron_job_log (job_name, records_affected, success)
+    VALUES ('update_overdue_rent_payments', updated_rows, true);
+    
+EXCEPTION WHEN OTHERS THEN
+    INSERT INTO cron_job_log (job_name, success, error_message)
+    VALUES ('update_overdue_rent_payments', false, SQLERRM);
+    RAISE;
+END;
+$$;
+
+-- Helper function to generate rent payments for a specific month (useful for manual corrections)
+CREATE OR REPLACE FUNCTION public.generate_rent_payments_for_month(target_year INTEGER, target_month INTEGER)
+RETURNS TABLE(
+    lease_id INTEGER,
+    lease_number VARCHAR(100),
+    created_payment_id INTEGER,
+    due_date DATE,
+    amount_due NUMERIC(10,2)
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    lease_record RECORD;
+    month_start DATE;
+    payment_due_date DATE;
+    new_payment_id INTEGER;
+    payments_created INTEGER := 0;
+BEGIN
+    -- Validate input parameters
+    IF target_month < 1 OR target_month > 12 THEN
+        RAISE EXCEPTION 'Invalid month: %. Must be between 1 and 12.', target_month;
+    END IF;
+    
+    IF target_year < 2020 OR target_year > 2030 THEN
+        RAISE EXCEPTION 'Invalid year: %. Must be between 2020 and 2030.', target_year;
+    END IF;
+    
+    -- Calculate the target month start
+    month_start := DATE(target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-01');
+    
+    -- Loop through all active leases
+    FOR lease_record IN
+        SELECT 
+            l.id,
+            l.lease_number,
+            l.monthly_rent,
+            l.rent_due_day,
+            l.late_fee
+        FROM leases l
+        WHERE l.lease_status = 'active'
+        AND l.start_date <= month_start + INTERVAL '1 month' - INTERVAL '1 day'
+        AND (l.end_date IS NULL OR l.end_date >= month_start)
+        AND NOT EXISTS (
+            SELECT 1 FROM rent_payments rp 
+            WHERE rp.lease_id = l.id 
+            AND EXTRACT(MONTH FROM rp.due_date) = target_month 
+            AND EXTRACT(YEAR FROM rp.due_date) = target_year
+        )
+    LOOP
+        -- Calculate due date for this lease
+        payment_due_date := month_start + INTERVAL '1 day' * (COALESCE(lease_record.rent_due_day, 1) - 1);
+        
+        -- Ensure due date doesn't exceed month boundaries
+        IF payment_due_date >= (month_start + INTERVAL '1 month') THEN
+            payment_due_date := (month_start + INTERVAL '1 month' - INTERVAL '1 day');
+        END IF;
+        
+        -- Create rent payment record
+        INSERT INTO rent_payments (
+            lease_id,
+            due_date,
+            amount_due,
+            amount_paid,
+            late_fee,
+            payment_status
+        ) VALUES (
+            lease_record.id,
+            payment_due_date,
+            lease_record.monthly_rent,
+            0,
+            COALESCE(lease_record.late_fee, 0),
+            CASE 
+                WHEN payment_due_date < CURRENT_DATE THEN 'overdue'
+                ELSE 'pending'
+            END
+        ) RETURNING id INTO new_payment_id;
+        
+        payments_created := payments_created + 1;
+        
+        -- Return the created payment info
+        RETURN QUERY SELECT 
+            lease_record.id,
+            lease_record.lease_number,
+            new_payment_id,
+            payment_due_date,
+            lease_record.monthly_rent;
+    END LOOP;
+    
+    -- Log the execution
+    INSERT INTO cron_job_log (
+        job_name, 
+        records_affected, 
+        success
+    ) VALUES (
+        'generate_rent_payments_for_month_' || target_year || '_' || target_month,
+        payments_created,
+        true
+    );
+END;
+$$;
+-- Drop and recreate the function with proper calculations
+DROP FUNCTION IF EXISTS public.calculate_monthly_expenses(date, date, integer);
+
+CREATE OR REPLACE FUNCTION public.calculate_monthly_expenses(
+    start_period date, 
+    end_period date, 
+    target_property_id integer DEFAULT NULL
+)
+RETURNS TABLE(
+    property_id integer, 
+    expense_type character varying, 
+    total_amount numeric,
+    calculation_details text
+) 
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    period_months numeric;
+    period_days integer;
+BEGIN
+    -- Validate input parameters
+    IF start_period > end_period THEN
+        RAISE EXCEPTION 'Start period (%) cannot be after end period (%)', start_period, end_period;
+    END IF;
+    
+    -- Calculate the period length in months and days
+    period_months := EXTRACT(YEAR FROM AGE(end_period, start_period)) * 12 + 
+                    EXTRACT(MONTH FROM AGE(end_period, start_period)) +
+                    EXTRACT(DAY FROM AGE(end_period, start_period)) / 30.44; -- Average days per month
+    
+    period_days := end_period - start_period + 1;
+    
+    RETURN QUERY
+    SELECT 
+        pe.property_id,
+        pe.expense_type,
+        CASE 
+            WHEN pe.frequency = 'monthly' THEN 
+                ROUND(pe.amount * period_months, 2)
+            
+            WHEN pe.frequency = 'quarterly' THEN 
+                ROUND(pe.amount * (period_months / 3.0), 2)
+            
+            WHEN pe.frequency = 'annual' THEN 
+                ROUND(pe.amount * (period_months / 12.0), 2)
+            
+            WHEN pe.frequency = 'one-time' THEN
+                CASE 
+                    WHEN pe.start_date BETWEEN start_period AND end_period THEN pe.amount
+                    ELSE 0::numeric
+                END
+            
+            ELSE 0::numeric
+        END as total_amount,
+        
+        -- Add calculation details for transparency
+        CASE 
+            WHEN pe.frequency = 'monthly' THEN 
+                'Monthly: $' || pe.amount || ' × ' || ROUND(period_months, 2) || ' months'
+            
+            WHEN pe.frequency = 'quarterly' THEN 
+                'Quarterly: $' || pe.amount || ' × ' || ROUND(period_months / 3.0, 2) || ' quarters'
+            
+            WHEN pe.frequency = 'annual' THEN 
+                'Annual: $' || pe.amount || ' × ' || ROUND(period_months / 12.0, 2) || ' years'
+            
+            WHEN pe.frequency = 'one-time' THEN
+                CASE 
+                    WHEN pe.start_date BETWEEN start_period AND end_period THEN 
+                        'One-time expense on ' || pe.start_date
+                    ELSE 'One-time expense outside period (excluded)'
+                END
+            
+            ELSE 'Unknown frequency'
+        END as calculation_details
+        
+    FROM property_expenses pe
+    WHERE pe.is_active = true
+    AND (target_property_id IS NULL OR pe.property_id = target_property_id)
+    AND (pe.end_date IS NULL OR pe.end_date >= start_period)
+    AND pe.start_date <= end_period
+    AND pe.amount > 0  -- Exclude zero or negative amounts
+    ORDER BY pe.property_id, pe.expense_type;
+END;
+$$;
+
+-- Create a summary version that aggregates by property
+CREATE OR REPLACE FUNCTION public.calculate_property_expense_summary(
+    start_period date, 
+    end_period date, 
+    target_property_id integer DEFAULT NULL
+)
+RETURNS TABLE(
+    property_id integer,
+    property_name character varying,
+    total_monthly_expenses numeric,
+    total_quarterly_expenses numeric,
+    total_annual_expenses numeric,
+    total_onetime_expenses numeric,
+    grand_total numeric,
+    expense_count integer
+) 
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    WITH expense_calculations AS (
+        SELECT * FROM calculate_monthly_expenses(start_period, end_period, target_property_id)
+    )
+    SELECT 
+        p.id as property_id,
+        p.property_name,
+        COALESCE(SUM(CASE WHEN pe.frequency = 'monthly' THEN ec.total_amount ELSE 0 END), 0) as total_monthly_expenses,
+        COALESCE(SUM(CASE WHEN pe.frequency = 'quarterly' THEN ec.total_amount ELSE 0 END), 0) as total_quarterly_expenses,
+        COALESCE(SUM(CASE WHEN pe.frequency = 'annual' THEN ec.total_amount ELSE 0 END), 0) as total_annual_expenses,
+        COALESCE(SUM(CASE WHEN pe.frequency = 'one-time' THEN ec.total_amount ELSE 0 END), 0) as total_onetime_expenses,
+        COALESCE(SUM(ec.total_amount), 0) as grand_total,
+        COUNT(ec.*) as expense_count
+    FROM properties p
+    LEFT JOIN property_expenses pe ON p.id = pe.property_id
+    LEFT JOIN expense_calculations ec ON p.id = ec.property_id AND pe.expense_type = ec.expense_type
+    WHERE (target_property_id IS NULL OR p.id = target_property_id)
+    GROUP BY p.id, p.property_name
+    HAVING COUNT(ec.*) > 0 OR target_property_id IS NOT NULL
+    ORDER BY p.property_name;
+END;
+$$;
+
+-- Create a function to get expense breakdown by category
+CREATE OR REPLACE FUNCTION public.calculate_expenses_by_category(
+    start_period date, 
+    end_period date, 
+    target_property_id integer DEFAULT NULL
+)
+RETURNS TABLE(
+    category_name character varying,
+    expense_count integer,
+    total_amount numeric,
+    avg_amount numeric,
+    frequency_breakdown jsonb
+) 
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    WITH expense_data AS (
+        SELECT 
+            COALESCE(ec.category_name, 'Uncategorized') as category,
+            pe.frequency,
+            ce.total_amount
+        FROM calculate_monthly_expenses(start_period, end_period, target_property_id) ce
+        JOIN property_expenses pe ON ce.property_id = pe.property_id AND ce.expense_type = pe.expense_type
+        LEFT JOIN expense_categories ec ON pe.category_id = ec.id
+        WHERE ce.total_amount > 0
+    )
+    SELECT 
+        ed.category as category_name,
+        COUNT(*)::integer as expense_count,
+        ROUND(SUM(ed.total_amount), 2) as total_amount,
+        ROUND(AVG(ed.total_amount), 2) as avg_amount,
+        jsonb_object_agg(
+            ed.frequency, 
+            json_build_object(
+                'count', COUNT(*),
+                'total', ROUND(SUM(ed.total_amount), 2)
+            )
+        ) as frequency_breakdown
+    FROM expense_data ed
+    GROUP BY ed.category
+    ORDER BY SUM(ed.total_amount) DESC;
+END;
+$$;
+
+-- DROP FUNCTION update_lease_status_by_dates();
+
+CREATE OR REPLACE FUNCTION update_lease_status_by_dates()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- 1. Set lease_status to 'active' where lease has started and is still ongoing
+    UPDATE leases
+    SET lease_status = 'active',
+        updated_at = CURRENT_TIMESTAMP
+    WHERE lease_status IN ('draft', 'renewed')
+      AND start_date <= CURRENT_DATE
+      AND (end_date IS NULL OR end_date >= CURRENT_DATE);
+
+    -- 2. Set lease_status to 'expired' where end_date has passed
+    UPDATE leases
+    SET lease_status = 'expired',
+        updated_at = CURRENT_TIMESTAMP
+    WHERE lease_status = 'active'
+      AND end_date IS NOT NULL
+      AND end_date < CURRENT_DATE;
+
+    -- 3. Set lease_status to 'terminated' where move_out_date has passed
+    UPDATE leases
+    SET lease_status = 'terminated',
+        updated_at = CURRENT_TIMESTAMP
+    WHERE lease_status = 'active'
+      AND move_out_date IS NOT NULL
+      AND move_out_date < CURRENT_DATE;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION mark_overdue_payments()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE rent_payments rp
+    SET payment_status = 'overdue',
+        updated_at = CURRENT_TIMESTAMP
+    FROM leases l
+    WHERE rp.lease_id = l.id
+      AND rp.payment_status = 'pending'
+      AND rp.due_date + COALESCE(l.grace_period_days, 0) < CURRENT_DATE;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION cleanup_expired_sessions()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE user_sessions 
+    SET is_active = false 
+    WHERE expires_at < CURRENT_TIMESTAMP AND is_active = true;
+    
+    -- Delete very old inactive sessions
+    DELETE FROM user_sessions 
+    WHERE expires_at < CURRENT_TIMESTAMP - INTERVAL '30 days';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION cleanup_access_logs()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Keep only latest 1000 access logs per document
+    DELETE FROM document_access_log 
+    WHERE id NOT IN (
+        SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY document_id ORDER BY access_timestamp DESC) as rn
+            FROM document_access_log
+        ) ranked
+        WHERE rn <= 1000
+    );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION log_blacklist_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Only log if blacklist status actually changed
+    IF OLD.is_blacklisted != NEW.is_blacklisted THEN
+        INSERT INTO tenant_blacklist_history (
+            tenant_id,
+            action,
+            reason,
+            severity,
+            notes,
+            performed_by,
+            previous_status
+        ) VALUES (
+            NEW.id,
+            CASE WHEN NEW.is_blacklisted THEN 'blacklisted' ELSE 'removed' END,
+            NEW.blacklist_reason,
+            NEW.blacklist_severity,
+            NEW.blacklist_notes,
+            COALESCE(NEW.blacklisted_by, 'system'),
+            OLD.is_blacklisted
+        );
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+-- ==============================================
+-- CREATE TRIGGERS
+-- ==============================================
+
+-- Update timestamps
+CREATE TRIGGER update_properties_updated_at 
+    BEFORE UPDATE ON properties 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_units_updated_at 
+    BEFORE UPDATE ON units 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_tenants_updated_at 
+    BEFORE UPDATE ON tenants 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_users_updated_at 
+    BEFORE UPDATE ON users 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_leases_updated_at 
+    BEFORE UPDATE ON leases 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_rent_payments_updated_at 
+    BEFORE UPDATE ON rent_payments 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_payment_submissions_updated_at 
+    BEFORE UPDATE ON payment_submissions 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_security_deposits_updated_at 
+    BEFORE UPDATE ON security_deposits 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_property_expenses_updated_at 
+    BEFORE UPDATE ON property_expenses 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_documents_updated_at 
+    BEFORE UPDATE ON documents 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Business logic triggers
+CREATE TRIGGER trigger_create_default_unit 
+    AFTER INSERT ON properties 
+    FOR EACH ROW EXECUTE FUNCTION create_default_unit();
+
+CREATE TRIGGER trigger_generate_lease_number 
+    BEFORE INSERT ON leases 
+    FOR EACH ROW 
+    WHEN (NEW.lease_number IS NULL OR NEW.lease_number = '')
+    EXECUTE FUNCTION generate_lease_number();
+
+CREATE TRIGGER trigger_update_unit_occupancy 
+    AFTER UPDATE ON leases 
+    FOR EACH ROW EXECUTE FUNCTION update_unit_occupancy();
+
+CREATE TRIGGER trigger_set_payment_date 
+    BEFORE UPDATE ON rent_payments 
+    FOR EACH ROW EXECUTE FUNCTION set_payment_date();
+
+CREATE TRIGGER trigger_log_blacklist_change 
+    AFTER UPDATE ON tenants 
+    FOR EACH ROW EXECUTE FUNCTION log_blacklist_change();
+
+CREATE TRIGGER validate_user_tenant_relationship_trigger 
+    BEFORE INSERT OR UPDATE ON users 
+    FOR EACH ROW EXECUTE FUNCTION validate_user_tenant_relationship();
+
+CREATE TRIGGER trigger_process_verified_payment 
+    AFTER UPDATE ON payment_submissions 
+    FOR EACH ROW EXECUTE FUNCTION process_verified_payment_submission();
+
+CREATE TRIGGER trigger_set_maintenance_completion_details 
+    BEFORE UPDATE ON maintenance_requests 
+    FOR EACH ROW EXECUTE FUNCTION set_maintenance_completion_details();
+
+-- ==============================================
+-- CREATE VIEWS (Key operational views only)
+-- ==============================================
+
+-- Active leases with tenant information
+CREATE OR REPLACE VIEW active_leases_with_tenants AS
+SELECT 
+    l.id AS lease_id,
+    l.lease_number,
+    l.start_date,
+    l.end_date,
+    l.monthly_rent,
+    l.lease_status,
+    p.property_name,
+    u.unit_number,
+    string_agg((t.first_name || ' ' || t.last_name), ', ' ORDER BY lt.is_primary_tenant DESC) AS tenant_names,
+    string_agg(t.email, ', ' ORDER BY lt.is_primary_tenant DESC) AS tenant_emails,
+    string_agg(t.phone, ', ' ORDER BY lt.is_primary_tenant DESC) AS tenant_phones
+FROM leases l
+JOIN units u ON l.unit_id = u.id
+JOIN properties p ON u.property_id = p.id
+JOIN lease_tenants lt ON l.id = lt.lease_id
+JOIN tenants t ON lt.tenant_id = t.id
+WHERE l.lease_status = 'active' AND lt.removed_date IS NULL
+GROUP BY l.id, l.lease_number, l.start_date, l.end_date, l.monthly_rent, l.lease_status, p.property_name, u.unit_number;
+
+-- Property summary with occupancy
+CREATE OR REPLACE VIEW property_summary AS
+SELECT 
+    p.id,
+    p.property_name,
+    p.address,
+    p.property_type,
+    p.total_units,
+    COALESCE(COUNT(u.id), 0) AS actual_units,
+    COALESCE(SUM(CASE WHEN u.occupancy_status = 'occupied' THEN 1 ELSE 0 END), 0) AS occupied_units,
+    COALESCE(SUM(CASE WHEN u.occupancy_status = 'vacant' THEN 1 ELSE 0 END), 0) AS vacant_units,
+    CASE 
+        WHEN COUNT(u.id) > 0 THEN 
+            ROUND(SUM(CASE WHEN u.occupancy_status = 'occupied' THEN 1 ELSE 0 END)::numeric / COUNT(u.id) * 100, 2)
+        ELSE 0
+    END AS occupancy_percentage
+FROM properties p
+LEFT JOIN units u ON p.id = u.property_id
+GROUP BY p.id, p.property_name, p.address, p.property_type, p.total_units;
+
+-- Rent collection overview
+CREATE OR REPLACE VIEW rent_collection_view AS
+SELECT 
+    rp.id,
+    rp.lease_id,
+    rp.due_date,
+    rp.amount_due,
+    rp.amount_paid,
+    rp.payment_status,
+    l.lease_number,
+    p.property_name,
+    u.unit_number,
+    CONCAT(p.property_name, ', Unit ', u.unit_number) AS property_unit,
+    (SELECT CONCAT(t.first_name, ' ', t.last_name)
+     FROM lease_tenants lt
+     JOIN tenants t ON lt.tenant_id = t.id
+     WHERE lt.lease_id = l.id AND lt.is_primary_tenant = true AND lt.removed_date IS NULL
+     LIMIT 1) AS tenant_name,
+    CASE 
+        WHEN rp.payment_status = 'overdue' THEN GREATEST(0, CURRENT_DATE - rp.due_date - l.grace_period_days)
+        ELSE 0
+    END AS days_overdue,
+    rp.amount_due + COALESCE(rp.late_fee, 0) AS total_amount_due
+FROM rent_payments rp
+JOIN leases l ON rp.lease_id = l.id
+JOIN units u ON l.unit_id = u.id
+JOIN properties p ON u.property_id = p.id;
+
+-- Pending payment submissions
+CREATE OR REPLACE VIEW pending_payment_submissions AS
+SELECT 
+    ps.id,
+    ps.amount,
+    ps.payment_method,
+    ps.transaction_reference,
+    ps.transaction_date,
+    ps.submission_date,
+    ps.notes,
+    (t.first_name || ' ' || t.last_name) AS tenant_name,
+    t.email AS tenant_email,
+    t.phone AS tenant_phone,
+    p.property_name,
+    u.unit_number,
+    l.lease_number,
+    l.monthly_rent
+FROM payment_submissions ps
+JOIN tenants t ON ps.tenant_id = t.id
+JOIN leases l ON ps.lease_id = l.id
+JOIN units u ON l.unit_id = u.id
+JOIN properties p ON u.property_id = p.id
+WHERE ps.verification_status = 'pending'
+ORDER BY ps.submission_date;
+
+-- Blacklisted tenants summary
+CREATE OR REPLACE VIEW blacklisted_tenants_summary AS
+SELECT 
+    t.id,
+    (t.first_name || ' ' || t.last_name) AS full_name,
+    t.email,
+    t.phone,
+    t.blacklist_reason,
+    t.blacklist_severity,
+    t.blacklisted_date,
+    t.blacklisted_by,
+    CASE 
+        WHEN p.property_name IS NOT NULL THEN (p.property_name || ' - Unit ' || u.unit_number)
+        ELSE 'No Current Lease'
+    END AS current_property,
+    (SELECT COUNT(*) FROM tenant_blacklist_history bh WHERE bh.tenant_id = t.id) AS history_entries,
+    EXTRACT(day FROM CURRENT_TIMESTAMP - t.blacklisted_date) AS days_blacklisted
+FROM tenants t
+LEFT JOIN lease_tenants lt ON t.id = lt.tenant_id AND lt.removed_date IS NULL
+LEFT JOIN leases l ON lt.lease_id = l.id AND l.lease_status = 'active'
+LEFT JOIN units u ON l.unit_id = u.id
+LEFT JOIN properties p ON u.property_id = p.id
+WHERE t.is_blacklisted = true
+ORDER BY t.blacklisted_date DESC;
+
+-- Insert basic user roles first
+INSERT INTO user_roles (id, role_name, description, permissions) VALUES
+(1, 'Admin', 'System Administrator with full access', '{"users": ["create", "read", "update", "delete"], "properties": ["create", "read", "update", "delete"], "tenants": ["create", "read", "update", "delete"], "leases": ["create", "read", "update", "delete"], "payments": ["create", "read", "update", "delete", "verify"], "maintenance": ["create", "read", "update", "delete"], "reports": ["read"]}'),
+(2, 'Manager', 'Property Manager with operational access', '{"properties": ["create", "read", "update"], "tenants": ["create", "read", "update"], "leases": ["create", "read", "update"], "payments": ["read", "verify"], "maintenance": ["create", "read", "update"], "reports": ["read"]}'),
+(3, 'Tenant', 'Tenant with limited access to their own data', '{"payments": ["create", "read"], "maintenance": ["create", "read"], "documents": ["read"]}');
+
+INSERT INTO blacklist_categories (category_name, description, default_severity) VALUES
+('Property Damage', 'Caused significant damage to property', 'high'),
+('Non-Payment', 'Chronic late payments or non-payment of rent', 'high'),
+('Lease Violation', 'Repeated violations of lease terms', 'medium'),
+('Noise Complaints', 'Multiple noise complaints from neighbors', 'medium'),
+('Illegal Activity', 'Engaged in illegal activities on property', 'severe'),
+('Harassment', 'Harassment of staff or other tenants', 'high'),
+('Unauthorized Occupancy', 'Allowed unauthorized persons to live in unit', 'medium'),
+('False Information', 'Provided false information during application', 'high'),
+('Eviction History', 'Previously evicted from other properties', 'low'),
+('Other', 'Other reasons not listed above', 'medium')
+ON CONFLICT (category_name) DO NOTHING;
+
+INSERT INTO expense_categories (category_name, description) VALUES
+('Property Tax', 'Annual property taxes'),
+('Insurance', 'Property insurance premiums'),
+('Administrative', 'Administrative and management costs'),
+('Utilities', 'Property utilities (if not tenant-paid)'),
+('Marketing', 'Property marketing and advertising'),
+('Legal & Professional', 'Legal fees, accounting, etc.'),
+('Capital Improvements', 'Major property improvements'),
+('Property Management', 'Management company fees'),
+('HOA Fees', 'Homeowners association fees'),
+('Landscaping', 'Landscaping and grounds maintenance'),
+('Security', 'Security systems and services'),
+('Cleaning', 'Common area cleaning services')
+ON CONFLICT (category_name) DO NOTHING;
+
